@@ -21,7 +21,7 @@ export type MemoryItem = {
   priority: number; // 0-1 float, higher = more important
   timestamp: number; // Unix timestamp ms
   ttl: number; // Time-to-live in ms
-  category: "user_input" | "system_state" | "intent" | "context";
+  category: "user_input" | "system_state" | "intent" | "context" | "system2_response";
   metadata?: Record<string, unknown>;
 };
 
@@ -243,6 +243,56 @@ export class ShortTermMemory {
       priority,
       ttl: this.config.defaultTtl,
     });
+  }
+
+  /**
+   * Track System 2's response for System 1's awareness.
+   * This allows System 1 to know what System 2 did/said.
+   */
+  trackSystem2Response(params: {
+    taskId: string;
+    state: string;
+    message: string;
+    result?: unknown;
+    error?: string;
+  }): MemoryItem {
+    const content = params.result
+      ? `[Task ${params.taskId.slice(0, 8)}] ${params.state}: ${params.message}\nResult: ${
+          typeof params.result === "string"
+            ? params.result.slice(0, 500)
+            : JSON.stringify(params.result).slice(0, 500)
+        }`
+      : `[Task ${params.taskId.slice(0, 8)}] ${params.state}: ${params.message}`;
+
+    return this.add({
+      content,
+      category: "system2_response",
+      priority: 0.9, // High priority - System 2 responses are important
+      ttl: 10 * 60 * 1000, // 10 minutes - keep longer for context
+      metadata: {
+        taskId: params.taskId,
+        state: params.state,
+        result: params.result,
+        error: params.error,
+      },
+    });
+  }
+
+  /**
+   * Get the last System 2 response.
+   */
+  getLastSystem2Response(): MemoryItem | undefined {
+    const responses = this.getByCategory("system2_response");
+    return responses.sort((a, b) => b.timestamp - a.timestamp)[0];
+  }
+
+  /**
+   * Get System 2 response for a specific task.
+   */
+  getSystem2ResponseForTask(taskId: string): MemoryItem | undefined {
+    return this.getByCategory("system2_response").find(
+      (item) => item.metadata?.taskId === taskId
+    );
   }
 
   // --- Private helpers ---

@@ -418,6 +418,8 @@ async function main() {
   console.log();
 
   // Initialize the orchestrator
+  const alterEgoEnabled = process.env.ALTER_EGO !== "0";
+  
   const config: System1Config = {
     memoryMaxSize: 20,
     complexityThreshold: 0.4,
@@ -428,7 +430,7 @@ async function main() {
     // System 2 (OpenClaw) for complex tasks
     system2Invoke: invokeSystem2,
 
-    // User notification handler
+    // User notification handler - System 1 formulates the final response
     onNotifyUser: (notification) => {
       const prefix =
         notification.type === "done"
@@ -439,11 +441,27 @@ async function main() {
               ? "❓"
               : "📊";
 
-      console.log(`\n${prefix} [System 2 → User] ${notification.message}`);
+      // Show System 1's user-facing message (formulated from System 2's output)
+      console.log(`\n${prefix} ${notification.userMessage}`);
+      
+      // Debug: show raw System 2 message in dim text
+      if (process.env.DEBUG_DUAL_SYSTEM) {
+        console.log(`   [debug: System 2 raw: ${notification.rawMessage.slice(0, 100)}...]`);
+      }
 
       if (notification.requiresInput) {
-        console.log("   (System 2 is waiting for your input)");
+        console.log("   (waiting for your input)");
       }
+    },
+    
+    // Alter Ego - autonomous command chaining
+    enableAlterEgo: alterEgoEnabled,
+    maxAlterEgoChain: 3,
+    onAlterEgoAction: (action) => {
+      console.log(`\n🎭 [Alter Ego] Chaining command (depth ${action.chainDepth}):`);
+      console.log(`   Original: "${action.originalIntent.slice(0, 50)}..."`);
+      console.log(`   Follow-up: "${action.followUpCommand}"`);
+      console.log(`   Reason: ${action.reasoning}`);
     },
   };
 
@@ -459,10 +477,13 @@ async function main() {
   console.log("  /status  - Show system status");
   console.log("  /memory  - Show short-term memory");
   console.log("  /tasks   - Show active tasks");
+  console.log("  /alterego - Toggle alter ego mode");
   console.log("  /embed   - Generate embedding for text (e.g., /embed hello world)");
   console.log("  /similar - Compare two texts (e.g., /similar cat | dog)");
   console.log("  /reset   - Reset the system");
   console.log("  /quit    - Exit");
+  console.log();
+  console.log(`Alter Ego: ${alterEgoEnabled ? "✓ enabled" : "✗ disabled"} (set ALTER_EGO=0 to disable)`);
   console.log();
 
   const prompt = () => {
@@ -557,6 +578,14 @@ async function handleCommand(cmd: string) {
     case "/reset": {
       globalOrchestrator.reset();
       console.log("\n🔄 System reset complete");
+      break;
+    }
+
+    case "/alterego": {
+      // Toggle alter ego mode
+      const currentConfig = (globalOrchestrator as any).config as System1Config;
+      currentConfig.enableAlterEgo = !currentConfig.enableAlterEgo;
+      console.log(`\n🎭 Alter Ego: ${currentConfig.enableAlterEgo ? "✓ enabled" : "✗ disabled"}`);
       break;
     }
 

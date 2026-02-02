@@ -63,6 +63,15 @@ const BACKGROUND_INDICATORS = [
 ];
 
 /**
+ * Context about System 2's last response for smarter classification.
+ */
+export type System2Context = {
+  lastTaskState?: string;
+  lastTaskResult?: unknown;
+  lastTaskMessage?: string;
+};
+
+/**
  * Decision Classifier for System 1
  *
  * Uses a combination of pattern matching and heuristics for
@@ -83,7 +92,10 @@ export class DecisionClassifier {
    * This is the main entry point for classification.
    * For production, this could be enhanced with phi-mini inference.
    */
-  classify(input: string, context?: { recentIntents?: string[] }): ClassificationResult {
+  classify(
+    input: string, 
+    context?: { recentIntents?: string[]; system2Context?: System2Context }
+  ): ClassificationResult {
     const trimmed = input.trim();
 
     // Empty input
@@ -94,6 +106,14 @@ export class DecisionClassifier {
         reasoning: "Empty input",
         suggestedResponse: "I didn't catch that. Could you say more?",
       };
+    }
+
+    // Check if this is a follow-up to System 2's last response
+    if (context?.system2Context) {
+      const followUpResult = this.checkFollowUp(trimmed, context.system2Context);
+      if (followUpResult) {
+        return followUpResult;
+      }
     }
 
     // Check simple patterns first (fast path)
@@ -171,6 +191,87 @@ export class DecisionClassifier {
       confidence: 0.5,
       reasoning: "Default classification",
     };
+  }
+
+  /**
+   * Check if user input is a follow-up to System 2's last response.
+   * This helps route context-dependent queries appropriately.
+   */
+  private checkFollowUp(input: string, system2Context: System2Context): ClassificationResult | null {
+    const lowered = input.toLowerCase().trim();
+    
+    // If task is waiting for input, ANY input should be delegated back
+    if (system2Context.lastTaskState === "WAITING") {
+      return {
+        decision: "DELEGATE_TO_SYSTEM_2",
+        confidence: 0.95,
+        reasoning: "Providing input to waiting task",
+        taskIntent: input,
+        constraints: { isFollowUp: true, previousState: "WAITING" },
+      };
+    }
+
+    // Follow-up patterns that reference previous context
+    const followUpPatterns = [
+      /^(more|explain|elaborate|details?|tell me more|what about|and|also)\b/i,
+      /^(why|how come|what does that mean)\b/i,
+      /^(can you|could you)\s+(also|now|then)\b/i,
+      /^(do|does|is|are|was|were)\s+(it|that|this|the)\b/i,
+      /\b(that|this|it|the result|the output|those|these)\b.*\?/i,
+      /^(ok|okay|great|good|nice|perfect|thanks?),?\s+(now|can you|please|also)/i,
+      /^(done|ready|finished|attached|connected|yes|yep|yeah)\s*[!.]*$/i,  // Simple confirmations
+    ];
+
+    const isFollowUp = followUpPatterns.some(p => p.test(input));
+    
+    // If it looks like a follow-up and there's a recent System 2 response
+    if (isFollowUp && system2Context.lastTaskState) {
+      // If the last task failed, user might be asking for clarification
+      if (system2Context.lastTaskState === "FAILED") {
+        return {
+          decision: "RESPOND_AND_DELEGATE",
+          confidence: 0.8,
+          reasoning: "Follow-up to failed task - may need retry or clarification",
+          taskIntent: `Follow up on previous task: ${input}`,
+          constraints: { isFollowUp: true, previousState: "FAILED" },
+        };
+      }
+      
+      // If the last task succeeded, user might want more from the result
+      if (system2Context.lastTaskState === "DONE") {
+        // Check if it's a simple clarification System 1 might handle
+        if (/^(thanks?|thank you|got it|okay|ok|great)\s*[!.]*$/i.test(input)) {
+          return {
+            decision: "RESPOND_ONLY",
+            confidence: 0.9,
+            reasoning: "Acknowledgment of completed task",
+            suggestedResponse: "You're welcome! Let me know if you need anything else.",
+          };
+        }
+        
+        // Otherwise delegate for deeper follow-up
+        return {
+          decision: "RESPOND_AND_DELEGATE",
+          confidence: 0.85,
+          reasoning: "Follow-up to completed task - user wants more based on result",
+          taskIntent: `Follow up on previous result: ${input}`,
+          constraints: { isFollowUp: true, previousState: "DONE", previousResult: system2Context.lastTaskResult },
+        };
+      }
+      
+      // If task is waiting for input
+      if (system2Context.lastTaskState === "WAITING") {
+        return {
+          decision: "DELEGATE_TO_SYSTEM_2",
+          confidence: 0.95,
+          reasoning: "Providing input to waiting task",
+          taskIntent: input,
+          constraints: { isFollowUp: true, previousState: "WAITING" },
+        };
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -345,18 +446,32 @@ export class DecisionClassifier {
   async classifyWithLlm(
     input: string,
     llmInvoke: (prompt: string) => Promise<string>,
+    system2Context?: System2Context,
   ): Promise<ClassificationResult> {
+    // Build context section if we have System 2's last response
+    let contextSection = "";
+    if (system2Context?.lastTaskMessage) {
+      contextSection = `
+Previous System 2 (backend) response:
+- State: ${system2Context.lastTaskState || "unknown"}
+- Message: ${system2Context.lastTaskMessage.slice(0, 300)}
+${system2Context.lastTaskResult ? `- Had result data: yes` : ""}
+
+Consider if the user's input is a follow-up to this previous response.
+`;
+    }
+
     const prompt = `Classify this user input into exactly ONE category.
 
 Categories:
 - RESPOND_ONLY: Simple greetings, thanks, basic Q&A that needs no tools
-- DELEGATE_TO_SYSTEM_2: Background tasks, no immediate response needed
+- DELEGATE_TO_SYSTEM_2: Background tasks, no immediate response needed  
 - RESPOND_AND_DELEGATE: Complex tasks needing acknowledgment + background work
-
+${contextSection}
 User input: "${input}"
 
 Respond with JSON only:
-{"decision": "RESPOND_ONLY|DELEGATE_TO_SYSTEM_2|RESPOND_AND_DELEGATE", "confidence": 0.0-1.0, "reasoning": "brief reason", "taskIntent": "extracted task if delegating"}`;
+{"decision": "RESPOND_ONLY|DELEGATE_TO_SYSTEM_2|RESPOND_AND_DELEGATE", "confidence": 0.0-1.0, "reasoning": "brief reason", "taskIntent": "extracted task if delegating", "isFollowUp": true/false}`;
 
     try {
       const response = await llmInvoke(prompt);
@@ -367,10 +482,11 @@ Respond with JSON only:
         confidence: parsed.confidence || 0.5,
         reasoning: parsed.reasoning || "LLM classification",
         taskIntent: parsed.taskIntent,
+        constraints: parsed.isFollowUp ? { isFollowUp: true } : undefined,
       };
     } catch {
       // Fallback to heuristic classification
-      return this.classify(input);
+      return this.classify(input, { system2Context });
     }
   }
 }
