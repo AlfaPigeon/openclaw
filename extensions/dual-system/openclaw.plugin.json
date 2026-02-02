@@ -1,0 +1,12 @@
+{
+  "id": "dual-system",
+  "name": "Dual-System Agent",
+  "description": "Dual-system architecture with System 1 (phi-mini fast layer) and System 2 (OpenClaw agentic core)",
+  "version": "0.1.0",
+  "kind": "extension",
+  "author": "OpenClaw",
+  "main": "index.ts",
+  "configKeys": [
+    "dual-system"
+  ]
+}

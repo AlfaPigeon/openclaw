@@ -297,6 +297,19 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/dual-system:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.47
+        version: 0.34.47
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
+
   extensions/google-antigravity-auth:
     devDependencies:
       openclaw:

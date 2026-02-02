@@ -1,0 +1,25 @@
+{
+  "name": "@openclaw/dual-system",
+  "version": "0.1.0",
+  "description": "Dual-system agent architecture: System 1 (phi-mini fast layer) + System 2 (OpenClaw agentic core)",
+  "type": "module",
+  "main": "index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "start": "bun run.ts",
+    "demo": "bun run.ts"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.33.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  }
+}
